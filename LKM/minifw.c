@@ -14,14 +14,15 @@
 #include <linux/udp.h>
 #include <linux/icmp.h>
 #include <linux/netfilter_ipv4.h>		// has the netfilter hook's structure
+#include <linux/cred.h>
 
 #include "minifw.h"     
 
-#define MAX_RULE_LENGTH 	PAGE_SIZE
-#define MAX_RULES 			100
+#define MAX_RULE_LENGTH PAGE_SIZE
+#define MAX_RULES 100
 #define RULE_DOES_NOT_MATCH 1
-#define RULE_MATCHES      	0
-#define UID_MAX        		256
+#define RULE_MATCHES 0
+#define UID_MAX 256
 
 //#define __KERNEL__
 //#define MODULE
@@ -46,7 +47,7 @@ unsigned int minifw_inbound_filter(unsigned int hooknum, struct sk_buff *skb, co
 unsigned int minifw_outbound_filter(unsigned int hooknum, struct sk_buff *skb, const struct net_device *in,
 									const struct net_device *out, int (*okfn)(struct sk_buff *));
 ssize_t minifw_write(struct file *filp, const char __user *buff, unsigned long len, void *data);
-ssize_t minifw_read( char *page, char **start, off_t off, int count, int *eof, void *data);
+ssize_t minifw_read(struct file *file, char *page, size_t count,loff_t *offp);
 
 // function prototypes
 int Check_Rule(struct sk_buff *skb, my_iptable *my_ipt);
@@ -65,24 +66,27 @@ int init_minifw_read_write_module(void) {
 	if(!my_ipt)														// check whether null pointer is returned for my_ipt
 		ret = -ENOMEM;
 	else {
-		memset((char *)my_ipt, 0, sizeof(my_iptable));				// owner-group-others
-		proc_entry = create_proc_entry("minifw", 0646, NULL);		// rw-r--rw-, the owner of this entry would have read/write permissions
+		memset((char *)my_ipt, 0, sizeof(my_iptable));
+
+		static struct file_operations fops = {
+			.owner = THIS_MODULE,
+			.read = minifw_read,
+			.write = minifw_write,
+		};
+		
+		proc_entry = proc_create("minifw", 0646, NULL, &fops);
+
 		if(proc_entry == NULL) {
 			ret = -ENOMEM;
 			vfree(my_ipt);
 			printk(KERN_INFO "minifw: couldn't create proc entry\n");
 		}		
 		else {
-			printk(KERN_INFO "minifw: minifw proc entry succesfully registered\n");
-			rule_index = 0;
+						rule_index = 0;
 			next_rule_ctr = 0;
 			num_of_rules = 0;
 			memset(allowed_users, 0, UID_MAX * sizeof(unsigned char));
-			allowed_users[0] = 1;      				// super user with uid 0 should have access to the iptables by default, hence set his flag to 1
-	
-			proc_entry->read_proc = minifw_read;
-			proc_entry->write_proc = minifw_write;
-			proc_entry->owner = THIS_MODULE;
+			allowed_users[0] = 1;
 			printk(KERN_INFO "minifw: minifw read_write module loaded successfully\n");	
 		}		
 	}
@@ -130,7 +134,7 @@ ssize_t minifw_write(struct file *filp, const char __user *buff, unsigned long l
 
 	// check the access rights of the user
 	if(Check_Permission(my_ipt)) {
-		printk(KERN_INFO "minifw: %d UID doesn't have sufficient rights to access minifw\n", current->uid);
+		printk(KERN_INFO "minifw: %d UID doesn't have sufficient rights to access minifw\n", current_uid());
 		return -EFAULT;	
 	}
 	
@@ -144,7 +148,7 @@ ssize_t minifw_write(struct file *filp, const char __user *buff, unsigned long l
 	}
 	// users who aren't super-user shouldn't be able to change the access rights of minifw
 	else if(my_ipt->action == ALLOW_ACCESS) {
-		if (current->uid != 0)
+		if (current_uid().val != 0)
 			printk(KERN_INFO "minifw: only the super user can change the access permissions\n");
 		else {			
 			printk(KERN_INFO "minifw: UID %d gained access rights\n", my_ipt->uid);
@@ -154,7 +158,7 @@ ssize_t minifw_write(struct file *filp, const char __user *buff, unsigned long l
 		return 0;
 	}
 	else if(my_ipt->action == REMOVE_ACCESS) {
-		if (current->uid != 0)
+		if (current_uid().val != 0)
 			printk(KERN_INFO "minifw: only the super user can change the access permissions\n");
 		else {			
 			if (my_ipt->uid == 0)		// the super user shouldn't be able to remove his own right
@@ -173,7 +177,7 @@ ssize_t minifw_write(struct file *filp, const char __user *buff, unsigned long l
 	return len;	
 }
 
-int minifw_read(char *page, char **start, off_t off, int count, int *eof, void *data) {
+ssize_t  minifw_read(struct file *file, char *page, size_t count,loff_t *offp) {
 	int len;
 	printk(KERN_INFO "minifw: Total number of rules: %d\n", num_of_rules);
 
@@ -246,7 +250,7 @@ unsigned int minifw_outbound_filter(unsigned int hooknum, struct sk_buff *skb, c
 // check for access right for the uid passed through my_ipt
 int Check_Permission(const my_iptable *my_ipt) {	
 	//printk(KERN_INFO "minifw: Checking the access right of UID %d, Index: %d\n", my_ipt->uid, my_ipt->uid % UID_MAX);
-	if (allowed_users[(current->uid % UID_MAX)]) {	
+	if (allowed_users[(current_uid().val % UID_MAX)]) {	
 		printk(KERN_INFO "minifw: UID %d is allowed to access minifw\n", my_ipt->uid);
 		return 0;
 	}
