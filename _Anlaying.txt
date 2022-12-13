@@ -1,0 +1,11 @@
+!If your work space is in AWS or remote by network, It can cause serious problems.!
+!So It is recommended to run it in a local environment.!
+
+Instructions for using the program can be found in 'minifirewall.c'.
+
+sudo ./minifirewall --in --proto ALL --action BLOCK : All block. [DO NOT EXECUTE IN NETWORK WORKSPACE.]
+                                 TCP                : Only block TCP packet.
+                                 UDP                : Only block UDP packet.
+                                 ICMP               : Only block ICMP packet.
+
+@This is only part of the analysis.
